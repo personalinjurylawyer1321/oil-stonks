@@ -1,40 +1,86 @@
 import os
-from detection import detect_tanks  # Repo’s RetinaNet (retrain on S2 if needed)
-from shadow_analysis import extract_shadow_height
-from sar_height import compute_sar_height
-from fusion import fuse_estimates
+import glob
+from datetime import datetime
+import pandas as pd
 
-# Paths (from GEE exports; adjust filenames)
-data_dir = './data'
-s2_path = os.path.join(data_dir, 'Cushing_S2_RGB_20250928_20251005.tif')
-l8_path = os.path.join(data_dir, 'Cushing_L8_RGB_Thermal_20250928_20251005.tif')
-s1_path = os.path.join(data_dir, 'Cushing_S1_VV_20250928_20251005.tif')
-modis_path = os.path.join(data_dir, 'Cushing_MODIS_NDVI_20250928_20251005.tif')
-# nisar_path = ...  # Add when available
+# Import the new, refactored analysis and fusion functions
+from sar_height import analyze_sar_for_tanks
+from shadow_analysis import analyze_optical_for_tanks
+from fusion import fuse_per_tank_estimates
 
-# Sun elevation: From S2 metadata (approx for Oct in OK: 40-50°)
-sun_alpha = 45
+# --- Configuration ---
+INVENTORY_FILE = './data/inventory/cushing_tank_inventory.csv'
+RAW_DATA_DIR = './data/raw'
+PROCESSED_SAR_DIR = './data/processed/s1_rtc'
+RESULTS_DIR = './data/results'
 
-# 1. Detect tanks on best optical (S2 preferred)
-if os.path.exists(s2_path):
-    detections = detect_tanks(s2_path)  # Returns bbox coords
-    opt_path = s2_path
-else:
-    detections = detect_tanks(l8_path)
-    opt_path = l8_path
+def find_latest_file(directory, pattern):
+    """Finds the most recent file in a directory matching a pattern."""
+    files = glob.glob(os.path.join(directory, pattern))
+    if not files:
+        return None
+    latest_file = max(files, key=os.path.getctime)
+    return latest_file
 
-# Crop to tanks if needed (simplified: assume full scene for prototype)
+def run_cushing_analysis():
+    """
+    Runs the full analysis pipeline: SAR, Optical, and Fusion.
+    """
+    print("--- Starting Cushing Oil Inventory Analysis ---")
+    os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# 2. Extract heights
-sar_heights, _ = compute_sar_height(s1_path)
-opt_heights = extract_shadow_height(opt_path, l8_path if opt_path == s2_path else None, sun_alpha)
+    # 1. Find the latest available data files
+    # For SAR, we use the processed RTC data (_VV.tif is the key band)
+    latest_sar_file = find_latest_file(PROCESSED_SAR_DIR, '*_VV.tif')
+    # For Optical, we use the raw S2 data (which our script reads)
+    latest_optical_file = find_latest_file(RAW_DATA_DIR, 'S2_*.tif')
 
-# 3. Fuse
-estimates = fuse_estimates(sar_heights, opt_heights, modis_path)  # Add roof_clf=... later
+    if not latest_sar_file:
+        print("Warning: No processed SAR file found. Skipping SAR analysis.")
+        sar_results = []
+    else:
+        # 2. Run SAR Analysis
+        sar_results = analyze_sar_for_tanks(latest_sar_file, INVENTORY_FILE)
 
-# 4. Aggregate for Cushing total (~80M bbl capacity; scale by # tanks)
-num_tanks = len(detections) if detections else 50  # From public: ~50 major tanks
-total_volume = estimates['fused_volume'] * num_tanks if estimates else 0
-print(f"Estimated Cushing Inventory: {total_volume:,.0f} barrels")
+    if not latest_optical_file:
+        print("Warning: No optical file found. Skipping optical analysis.")
+        optical_results = []
+    else:
+        # 3. Run Optical Shadow Analysis
+        optical_results = analyze_optical_for_tanks(latest_optical_file, INVENTORY_FILE)
 
-# Save: pd.DataFrame([estimates]).to_csv('cushing_estimate_20251005.csv')
+    # 4. Fuse the results
+    print("\n--- Fusing SAR and Optical Estimates ---")
+    fused_estimates_df = fuse_per_tank_estimates(sar_results, optical_results)
+
+    if fused_estimates_df.empty:
+        print("\nFusion resulted in no data. Cannot generate final report.")
+        return
+
+    # 5. Aggregate and report total volume
+    final_report = fused_estimates_df.dropna(subset=['fused_volume_bbl'])
+    total_cushing_volume = final_report['fused_volume_bbl'].sum()
+
+    print("\n--- Final Cushing Inventory Estimate ---")
+    print(f"Total Estimated Volume: {total_cushing_volume:,.0f} barrels")
+    print(f"Number of tanks in estimate: {len(final_report)} / {len(fused_estimates_df)}")
+    print("\nBreakdown by data source:")
+    print(final_report['data_source'].value_counts())
+
+    # 6. Save the detailed final report
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    report_filename = os.path.join(RESULTS_DIR, f'cushing_inventory_report_{timestamp}.csv')
+    final_report.to_csv(report_filename, index=False)
+    print(f"\nDetailed report saved to: {report_filename}")
+
+
+if __name__ == '__main__':
+    # Before running, ensure dummy data exists from previous steps.
+    # We need:
+    # - ./data/inventory/cushing_tank_inventory.csv
+    # - A dummy SAR RTC file in ./data/processed/s1_rtc/
+    # - A dummy S1 metadata json in ./data/raw/
+    # - A dummy S2 optical tif in ./data/raw/
+    # - A dummy S2 metadata json in ./data/raw/
+
+    run_cushing_analysis()

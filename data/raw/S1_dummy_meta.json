@@ -1,0 +1,10 @@
+{
+    "scene_id": "S1A_IW_GRDH_1SDV_20251001T001858_20251001T001923_042969_05208D_523E",
+    "timestamp": "20251001T001858",
+    "platform": "S1A",
+    "orbit_pass": "DESCENDING",
+    "incidence_angle_near": 36.5,
+    "incidence_angle_far": 39.5,
+    "precipitation_mm_24h": 0.1,
+    "is_wet_ground": false
+}
