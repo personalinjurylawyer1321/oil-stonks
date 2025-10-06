@@ -1,0 +1,8 @@
+earthengine-api
+geemap
+pandas
+requests
+scikit-image
+opencv-python
+rasterio
+scipy
