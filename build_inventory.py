@@ -140,10 +140,46 @@ def measure_tank_diameter(image_data, image_bounds):
     if len(radii) > 0:
         # Convert radius from pixels to meters
         diameter_m = radii[0] * 2 * res
-        return round(diameter_m, 2)
+        return round(diameter_m, 2), res
     else:
         print("    - Hough transform found no circles.")
-        return None
+        return None, None
+
+def classify_roof_type(image_data, diameter_m, res):
+    """
+    Classifies a tank roof as 'fixed' or 'floating' based on internal features.
+    """
+    if image_data is None or diameter_m is None:
+        return 'unknown'
+
+    with BytesIO(image_data) as memfile:
+        with rasterio.open(memfile) as dataset:
+            image = dataset.read(1) # Use a single band (grayscale)
+
+    # Create a mask for the interior of the tank
+    radius_px = (diameter_m / 2) / res
+    center_px = (image.shape[0] // 2, image.shape[1] // 2)
+    mask = np.zeros_like(image, dtype=bool)
+    rr, cc = circle_perimeter(int(center_px[0]), int(center_px[1]), int(radius_px - 5)) # Inset mask
+    mask[rr, cc] = 1
+    from skimage.morphology import flood_fill
+    mask = flood_fill(mask, (int(center_px[0]), int(center_px[1])), True)
+
+    # Analyze the texture within the mask
+    interior_pixels = image[mask]
+    if interior_pixels.size == 0:
+        return 'unknown'
+
+    # Heuristic: Floating roofs have more texture (shadows, supports) than fixed roofs.
+    # A high standard deviation in pixel values suggests more texture.
+    texture_metric = np.std(interior_pixels)
+
+    # Threshold can be tuned based on empirical results
+    is_floating = texture_metric > 15.0
+
+    roof_type = 'floating' if is_floating else 'fixed'
+    print(f"    - Texture metric (std dev): {texture_metric:.2f}. Classified as: {roof_type}")
+    return roof_type
 
 def build_inventory():
     """Main function to build and save the tank inventory."""
@@ -162,16 +198,17 @@ def build_inventory():
         image_data, image_bounds = get_naip_imagery_for_tank(tank['geometry'])
 
         if image_data:
-            diameter = measure_tank_diameter(image_data, image_bounds)
+            diameter, res = measure_tank_diameter(image_data, image_bounds)
             if diameter:
                 print(f"  - Measured Diameter: {diameter} m")
+                roof_type = classify_roof_type(image_data, diameter, res)
                 inventory.append({
                     'tank_id': f"cushing_{index:04d}",
                     'osm_id': tank['osm_id'],
                     'latitude': tank['latitude'],
                     'longitude': tank['longitude'],
                     'diameter_m': diameter,
-                    'roof_type': 'floating' # Assume floating for now; can be refined later
+                    'roof_type': roof_type
                 })
             else:
                 print("  - Could not measure diameter.")

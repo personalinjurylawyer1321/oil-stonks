@@ -155,12 +155,25 @@ def analyze_sar_for_tanks(sar_rtc_path, inventory_path):
     results = []
     with rasterio.open(sar_rtc_path) as sar_dataset:
         for index, tank in inventory_df.iterrows():
-            estimate = estimate_tank_fill_level(tank, sar_dataset, incidence_angle)
-            results.append(estimate)
-            if estimate['error']:
-                print(f"  - Failed on {estimate['tank_id']}: {estimate['error']}")
+            # Check the roof type before processing
+            if tank.get('roof_type') == 'floating':
+                estimate = estimate_tank_fill_level(tank, sar_dataset, incidence_angle)
+                if estimate.get('error'):
+                    print(f"  - Failed on {estimate['tank_id']}: {estimate['error']}")
+                else:
+                    print(f"  - Processed {estimate['tank_id']} (floating): Height={estimate.get('fill_height_m')}m")
             else:
-                print(f"  - Processed {estimate['tank_id']}: Height={estimate['fill_height_m']}m")
+                # For fixed-roof tanks, we cannot determine volume, so we skip analysis.
+                print(f"  - Skipping {tank['tank_id']} (fixed roof).")
+                estimate = {
+                    'tank_id': tank['tank_id'],
+                    'fill_height_m': np.nan,
+                    'fill_volume_bbl': np.nan,
+                    'latitude': tank['latitude'],
+                    'longitude': tank['longitude'],
+                    'error': 'Skipped: fixed roof'
+                }
+            results.append(estimate)
 
     return results
 

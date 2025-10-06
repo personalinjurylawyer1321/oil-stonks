@@ -133,12 +133,24 @@ def analyze_optical_for_tanks(optical_image_path, inventory_path):
     results = []
     with rasterio.open(optical_image_path) as optical_dataset:
         for index, tank in inventory_df.iterrows():
-            estimate = estimate_tank_shadow_fill(tank, optical_dataset, sun_azimuth, sun_elevation)
-            results.append(estimate)
-            if estimate['error']:
-                print(f"  - Failed on {estimate['tank_id']}: {estimate['error']}")
+            # Check the roof type before processing
+            if tank.get('roof_type') == 'floating':
+                estimate = estimate_tank_shadow_fill(tank, optical_dataset, sun_azimuth, sun_elevation)
+                if estimate.get('error'):
+                    print(f"  - Failed on {estimate['tank_id']}: {estimate['error']}")
+                else:
+                    print(f"  - Processed {estimate['tank_id']} (floating): Height={estimate.get('fill_height_m')}m")
             else:
-                print(f"  - Processed {estimate['tank_id']}: Height={estimate['fill_height_m']}m")
+                # For fixed-roof tanks, we cannot determine volume, so we skip analysis.
+                print(f"  - Skipping {tank['tank_id']} (fixed roof).")
+                estimate = {
+                    'tank_id': tank['tank_id'],
+                    'fill_height_m': np.nan,
+                    'fill_volume_bbl': np.nan,
+                    'shadow_length_m': np.nan,
+                    'error': 'Skipped: fixed roof'
+                }
+            results.append(estimate)
 
     return results
 

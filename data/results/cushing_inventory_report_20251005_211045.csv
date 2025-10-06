@@ -1,0 +1,2 @@
+tank_id,sar_volume_bbl,sar_error,optical_volume_bbl,optical_error,fused_volume_bbl,data_source
+cushing_0000,16318.73,,16318.73,,16318.73,Fused (SAR/Optical)
